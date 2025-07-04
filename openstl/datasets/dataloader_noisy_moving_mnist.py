@@ -118,7 +118,8 @@ class NoisyMovingMNIST(MovingMNIST):
 
 def load_data(batch_size, val_batch_size, data_root, num_workers=4, data_name='mnist',
               pre_seq_length=10, aft_seq_length=10, in_shape=[10, 1, 64, 64],
-              distributed=False, use_augment=False, use_prefetcher=False, drop_last=False, noise_type='perceptual'):
+              distributed=False, use_augment=False, use_prefetcher=False, drop_last=False, 
+              noise_type='perceptual', val_subset_ratio=0.1):
 
     image_size = in_shape[-1] if in_shape is not None else 64
     train_set = NoisyMovingMNIST(root=data_root, is_train=True, data_name=data_name,
@@ -130,13 +131,20 @@ def load_data(batch_size, val_batch_size, data_root, num_workers=4, data_name='m
                            n_frames_output=aft_seq_length, num_objects=[2],
                            image_size=image_size, use_augment=False)
 
+    # Create validation subset for faster validation during training
+    if val_subset_ratio < 1.0:
+        val_indices = list(range(0, len(test_set), int(1/val_subset_ratio)))
+        val_subset = torch.utils.data.Subset(test_set, val_indices)
+    else:
+        val_subset = test_set
+
     dataloader_train = create_loader(train_set,
                                      batch_size=batch_size,
                                      shuffle=True, is_training=True,
                                      pin_memory=False, drop_last=True,
                                      num_workers=num_workers,
                                      distributed=distributed, use_prefetcher=use_prefetcher)
-    dataloader_vali = create_loader(test_set,
+    dataloader_vali = create_loader(val_subset,
                                     batch_size=val_batch_size,
                                     shuffle=False, is_training=False,
                                     pin_memory=False, drop_last=drop_last,

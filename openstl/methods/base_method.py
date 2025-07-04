@@ -66,26 +66,57 @@ class Base_method(l.LightningModule):
     def test_step(self, batch, batch_idx):
         batch_x, batch_y = batch
         pred_y = self(batch_x, batch_y)
-        outputs = {'inputs': batch_x.cpu().numpy(), 'preds': pred_y.cpu().numpy(), 'trues': batch_y.cpu().numpy()}
-        self.test_outputs.append(outputs)
-        return outputs
-
-    def on_test_epoch_end(self):
-        results_all = {}
-        for k in self.test_outputs[0].keys():
-            results_all[k] = np.concatenate([batch[k] for batch in self.test_outputs], axis=0)
         
-        eval_res, eval_log = metric(results_all['preds'], results_all['trues'],
+        batch_x_np = batch_x.cpu().numpy()
+        pred_y_np = pred_y.cpu().numpy()
+        batch_y_np = batch_y.cpu().numpy()
+        
+        # Compute metrics for this batch immediately to reduce memory usage
+        batch_eval_res, _ = metric(pred_y_np, batch_y_np,
             self.hparams.test_mean, self.hparams.test_std, metrics=self.metric_list, 
             channel_names=self.channel_names, spatial_norm=self.spatial_norm,
             threshold=self.hparams.get('metric_threshold', None))
         
-        results_all['metrics'] = np.array([eval_res['mae'], eval_res['mse']])
+        # Store only essential information for final aggregation
+        outputs = {
+            'batch_size': batch_x.shape[0],
+            'mae': batch_eval_res['mae'] * batch_x.shape[0], 
+            'mse': batch_eval_res['mse'] * batch_x.shape[0],
+        }
+        
+        # Only store a small sample of the data for visualization
+        if batch_idx == 0 and self.trainer.is_global_zero:
+            outputs.update({
+                'sample_inputs': batch_x_np[:4],
+                'sample_preds': pred_y_np[:4],
+                'sample_trues': batch_y_np[:4]
+            })
+        
+        self.test_outputs.append(outputs)
+        return outputs
 
+    def on_test_epoch_end(self):
+        # Aggregate metrics across all batches
+        total_samples = sum([batch['batch_size'] for batch in self.test_outputs])
+        total_mae = sum([batch['mae'] for batch in self.test_outputs]) / total_samples
+        total_mse = sum([batch['mse'] for batch in self.test_outputs]) / total_samples
+        
+        eval_res = {'mae': total_mae, 'mse': total_mse}
+        eval_log = f"mae:{eval_res['mae']:.4f}, mse:{eval_res['mse']:.4f}"
+        
         if self.trainer.is_global_zero:
             print_log(eval_log)
             folder_path = check_dir(osp.join(self.hparams.save_dir, 'saved'))
-
-            for np_data in ['metrics', 'inputs', 'trues', 'preds']:
-                np.save(osp.join(folder_path, np_data + '.npy'), results_all[np_data])
-        return results_all
+            
+            metrics_data = np.array([eval_res['mae'], eval_res['mse']])
+            np.save(osp.join(folder_path, 'metrics.npy'), metrics_data)
+            
+            sample_batch = next((batch for batch in self.test_outputs if 'sample_inputs' in batch), None)
+            if sample_batch:
+                for data_type in ['sample_inputs', 'sample_preds', 'sample_trues']:
+                    np.save(osp.join(folder_path, data_type.replace('sample_', '') + '_sample.npy'), 
+                           sample_batch[data_type])
+                    
+        self.test_outputs.clear()
+        
+        return {'mae': eval_res['mae'], 'mse': eval_res['mse']}

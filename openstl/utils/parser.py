@@ -38,8 +38,9 @@ def create_parser():
                                 'sevir_vis', 'sevir_ir069', 'sevir_ir107', 'sevir_vil'],
                         help='Dataset name (default: "mmnist")')
     parser.add_argument('--pre_seq_length', default=None, type=int, help='Sequence length before prediction')
-    parser.add_argument('--aft_seq_length', default=None, type=int, help='Sequence length after prediction')
+    parser.add_argument('--aft_seq_length', default=10, type=int, help='Sequence length after prediction')
     parser.add_argument('--total_length', default=None, type=int, help='Total Sequence length for prediction')
+    parser.add_argument('--timesteps', default=10, type=int, help='Number of timesteps')
     parser.add_argument('--use_augment', action='store_true', default=False,
                         help='Whether to use image augmentations for training')
     parser.add_argument('--use_prefetcher', action='store_true', default=False,
@@ -52,7 +53,7 @@ def create_parser():
                         choices=['ConvLSTM', 'convlstm', 'E3DLSTM', 'e3dlstm', 'MAU', 'mau', 'MIM', 'mim', 
                                 'PhyDNet', 'phydnet', 'PredRNN', 'predrnn', 'PredRNNpp',  'predrnnpp', 
                                 'PredRNNv2', 'predrnnv2', 'SimVP', 'simvp', 'TAU', 'tau', 'MMVP', 'mmvp', 
-                                'SwinLSTM', 'swinlstm', 'swinlstm_d', 'swinlstm_b'],
+                                'SwinLSTM', 'swinlstm', 'swinlstm_d', 'swinlstm_b', 'DYffusion', 'dyffusion'],
                         help='Name of video prediction method to train (default: "SimVP")')
     parser.add_argument('--config_file', '-c', default=None, type=str,
                         help='Path to the default config file')
@@ -133,6 +134,7 @@ def default_parser():
         'pre_seq_length': 10,
         'aft_seq_length': 10,
         'total_length': 20,
+        'timesteps': 10,
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
