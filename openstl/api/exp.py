@@ -2,6 +2,7 @@
 
 import sys
 import time
+import os
 import os.path as osp
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 
@@ -15,11 +16,52 @@ from lightning import seed_everything, Trainer
 import lightning.pytorch.callbacks as lc
 
 
+### This should handle dyffusion and ddpm models
+class TrainingWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, batch_x, batch_y):
+        return self.model.forward_training(batch_x, batch_y)
+
+
+# class DDPMFlopWrapper(torch.nn.Module):
+#     """Simplified wrapper for DDPM FLOP counting that avoids tracing issues."""
+#     def __init__(self, model):
+#         super().__init__()
+#         self.model = model
+
+#     def forward(self, batch_x, batch_y):
+#         # For FLOP counting, we just need to trace through the U-Net once
+#         # Use a fixed timestep to avoid dynamic tensor operations
+#         B, T, C, H, W = batch_x.shape
+#         device = batch_x.device
+        
+#         # Create fixed timestep (mid-range value)
+#         t = torch.full((B,), self.model.timesteps // 2, device=device, dtype=torch.long)
+        
+#         # Create condition from last input frame
+#         condition = batch_x[:, -1]  # [B, C, H, W] - single frame condition
+        
+#         # Add some noise to target (simplified version)
+#         noise = torch.randn_like(batch_y)
+#         alpha_t = 0.5  # Fixed value for FLOP counting
+#         x_noisy = alpha_t * batch_y + (1 - alpha_t) * noise
+        
+#         # Flatten temporal dimension for UNet: [B, T, C, H, W] -> [B, T*C, H, W]
+#         x_noisy_flat = x_noisy.view(B, T*C, H, W)
+        
+#         # Call the U-Net with properly shaped inputs
+#         return self.model.model(x_noisy_flat, time=t, condition=condition)
+
 class BaseExperiment(object):
     """The basic class of PyTorch training and evaluation."""
 
     def __init__(self, args, dataloaders=None, strategy='auto'):
         """Initialize experiments (non-dist as an example)"""
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            torch.set_float32_matmul_precision('high')
         self.args = args
         self.config = self.args.__dict__
         self.method = None
@@ -95,9 +137,10 @@ class BaseExperiment(object):
 
     def test(self):
         if self.args.test == True:
-            ckpt = torch.load(osp.join(self.save_dir, 'checkpoints', 'best.ckpt'))
-            self.method.load_state_dict(ckpt['state_dict'])
-        self.trainer.test(self.method, self.data)
+            ckpt_path = osp.join(self.save_dir, 'checkpoints', 'best.ckpt')
+            self.trainer.test(self.method, self.data, ckpt_path=ckpt_path)
+        else:
+            self.trainer.test(self.method, self.data)
     
     def display_method_info(self, args):
         """Plot the basic infomation of supported methods"""
@@ -106,8 +149,13 @@ class BaseExperiment(object):
             assign_gpu = 'cuda:' + (str(args.gpus[0]) if len(args.gpus) == 1 else '0')
             device = torch.device(assign_gpu)
         T, C, H, W = args.in_shape
-        if args.method in ['simvp', 'tau', 'mmvp', 'wast']:
-            input_dummy = torch.ones(1, args.pre_seq_length, C, H, W).to(device)
+        model = self.method.model.to(device)
+        if args.method in ['simvp', 'tau', 'mmvp', 'wast', 'dyffusion']:
+            input_dummy = torch.ones(5, args.pre_seq_length, C, H, W).to(device)
+            if args.method in ['dyffusion']:
+                model = TrainingWrapper(model).to(device)
+                batch_y_dummy = torch.ones(5, args.aft_seq_length, C, H, W).to(device)
+                input_dummy = (input_dummy.to(device), batch_y_dummy.to(device))
         elif args.method == 'phydnet':
             _tmp_input1 = torch.ones(1, args.pre_seq_length, C, H, W).to(device)
             _tmp_input2 = torch.ones(1, args.aft_seq_length, C, H, W).to(device)
@@ -134,10 +182,10 @@ class BaseExperiment(object):
 
         dash_line = '-' * 80 + '\n'
         info = self.method.model.__repr__()
-        flops = FlopCountAnalysis(self.method.model.to(device), input_dummy)
+        flops = FlopCountAnalysis(model, input_dummy)
         flops = flop_count_table(flops)
         if args.fps:
-            fps = measure_throughput(self.method.model.to(device), input_dummy)
+            fps = measure_throughput(model, input_dummy)
             fps = 'Throughputs of {}: {:.3f}\n'.format(args.method, fps)
         else:
             fps = ''
